@@ -1,0 +1,299 @@
+---
+title: "a_primer_on_comparative_methods"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+<br />
+<br />
+
+### library requirements:
+```{r, message=FALSE, warning=FALSE}
+
+#install.packages("ape")
+#install.packages("phytools")
+#install.packages("geiger")
+#install.packages("corHMM")
+
+library(ape)
+library(phytools)
+library(geiger)
+library(corHMM)
+
+```
+
+<br />
+<br />
+<br />
+<br />
+
+## PART 1 - species level comparisons are affected by phylogeny ... how can we deal with this!?
+
+Species covary because they share (some) evolutionary history: we expect closely related species to be more similar to each other than more distantly related species. Treating species as independent in statistical analyses can be misleading! Let see a practical example:
+
+### simulate a tree:
+```{r, fig.width=12}
+
+set.seed(42) ## just choose an integer
+tree<-NULL
+while(is.null(tree)) 
+    tree<-pbtree(n=100,b=1,d=0.6,extant.only=T)
+plotTree(tree,ftype="off")
+
+```
+
+### simulate uncorrelated (Brownian) evolution:
+```{r, fig.width=12}
+
+x<-fastBM(tree)
+y<-fastBM(tree)
+
+obj<-contMap(tree,x,plot=FALSE)
+plot(obj,legend=0.7*max(nodeHeights(tree)),sig=2,fsize=c(0.7,0.9))
+
+obj<-contMap(tree,y,plot=FALSE)
+plot(obj,legend=0.7*max(nodeHeights(tree)),sig=2,fsize=c(0.7,0.9))
+
+```
+
+### fit Ordinary Linear Model (OLM):
+```{r}
+
+fit.olm <- lm(y~x)
+
+plot(x,y,cex=1.5,pch=21,bg="grey")
+#abline(fit.olm,lwd=2,lty="dashed",col="red")
+
+summary(fit.olm)
+
+```
+
+These data were simulated in the absence of any evolutionary correlation between x & y! It's easy for phylogeny to induce a type I error, since closely related species have similar phenotypes by descent, and can not be considered independent data points about the evolutionary process.
+
+### tree projection into trait space
+```{r, fig.width=12}
+
+phylomorphospace(tree,cbind(x,y),label="off",node.size=c(0,0))
+points(x,y,pch=21,bg="grey",cex=1.5)
+#abline(fit.olm,lwd=2,lty="dashed",col="red")
+
+```
+
+### adjust with Phylogenetic Independent Contrasts (PIC)
+
+Phylogenetic Independent Contrasts (PIC) is a method for accounting for phylogenetic relatedness when making interspecific trait comparisons.
+Now let's see if by using Felsenstein's (1985!) algorithm we can test this type I error.
+
+```{r, fig.width=12}
+
+x_PIC<-pic(x,tree)
+y_PIC<-pic(y,tree)
+fit.pic<-lm(y_PIC~x_PIC+0)
+fit.pic
+
+plot(x_PIC,y_PIC,cex=1.5,pch=21,bg="grey",
+    xlab="phylogenetically independent contrasts for x",
+    ylab="phylogenetically independent contrasts for y")
+#abline(fit.pic,lwd=2,lty="dashed",col="red")
+## add axes
+abline(h=0,lty="dotted",col="grey")
+abline(v=0,lty="dotted",col="grey")
+
+summary(fit.pic)
+
+```
+
+We need to take the phylogeny into account ... our trait data were simulated without an evolutionary relationship between x & y. The relationship that we retrieved iwith OLS is a type I error driven by the phylogenetic structure of our data. Type II errors are possible as well!
+
+<br />
+<br />
+<br />
+<br />
+
+## PART 2 - traits that can affect phylogenies!?
+
+The Enterobacterales order of Gammaproteobacteria shifts from free-living to endosymbiont are considered to have happened independently numerous times. The phylogenetic placement of endosymbiotic lineages is highly uncertain: this is due to their peculiar sequence evolution, consisting of a non-homogeneous (amino acids frequencies do not remain constant, _i.e._ strong bias towards AT-rich base composition in symbionts) and non-stationary (evolutionary rates do not remain constant, i.e. accelerated evolutionary rates in symbionts) process. Such idiosyncrasies violate the assumption of traditional phylogenetic models leading to systematic error and artifactual clustering of species.
+
+Let's see how genes AT content maps across two phylogenies:
+
+Here is a "simple one" (it appears to artificially cluster species based on their AT content):
+```{r, fig.width=12}
+
+tree_simp<-read.tree("tree_enterobacterales_simp.nwk")
+tree_simp <- midpoint.root(tree_simp)
+tree_simp <- chronos(tree_simp, model = "clock", lambda = 7)
+
+data<-read.csv("traits_enterobacterales.csv",row.names=1)
+AT_content<-setNames(as.numeric(data[,"mean_CDS_at"]),rownames(data))
+
+fit<-fastAnc(tree_simp, AT_content,vars=TRUE,CI=TRUE)
+
+simp_ASR<-contMap(tree_simp,AT_content,plot=FALSE)
+
+plot(simp_ASR, ftype="off", type="fan")
+
+```
+
+Here is a "complex one" (looks much better in splitting that AT rich clade from the previous tree):
+```{r, fig.width=12}
+
+tree_comp<-read.tree("tree_enterobacterales_comp.nwk")
+tree_comp <- midpoint.root(tree_comp)
+tree_comp <- chronos(tree_comp, model = "clock", lambda = 7)
+
+data<-read.csv("traits_enterobacterales.csv",row.names=1)
+AT_content<-setNames(as.numeric(data[,"mean_CDS_at"]),rownames(data))
+
+fit<-fastAnc(tree_comp, AT_content,vars=TRUE,CI=TRUE)
+
+comp_ASR<-contMap(tree_comp,AT_content,plot=FALSE)
+
+plot(comp_ASR, ftype="off", type="fan")
+
+```
+
+### is there a correlation between AT content and the number of genes in Enterobacterales:
+
+Let's just act as we could forget what we learned earlier and consider all datapoints (species) unrelated:
+```{r, fig.width=12}
+
+fit<-lm(data$mean_CDS_at~data$mean_CDS_ln)
+summary(fit)
+
+```
+
+Let's use the "simple" tree to correct with Feselstain's PIC:
+```{r, fig.width=12}
+
+mean_CDS_at_PIC<-pic(data$mean_CDS_at,tree_simp)
+mean_CDS_ln_PIC<-pic(data$mean_CDS_ln,tree_simp)
+fit.pic<-lm(mean_CDS_at_PIC~mean_CDS_ln_PIC)
+summary(fit.pic)
+
+```
+
+Let's use the "complex" tree to correct with Feselstain's PIC:
+```{r, fig.width=12}
+
+mean_CDS_at_PIC<-pic(data$mean_CDS_at,tree_comp)
+mean_CDS_ln_PIC<-pic(data$mean_CDS_ln,tree_comp)
+fit.pic<-lm(mean_CDS_at_PIC~mean_CDS_ln_PIC)
+summary(fit.pic)
+
+```
+
+Take-home message: some phylogeny is better than no phylogeny :-) 
+
+<br />
+<br />
+<br />
+<br />
+
+## PART 3 - Can complex traits revert after their loss!?
+
+Dollo's law of irreversibility (also known as Dollo's law and Dollo's principle), proposed in 1893 by Belgian paleontologist Louis Dollo states that, "an organism never returns exactly to a former state, even if it finds itself placed in conditions of existence identical to those in which it has previously lived ... it always keeps some trace of the intermediate stages through which it has passed." The statement is often misinterpreted as claiming that evolution is not reversible, or that lost structures and organs cannot reappear in the same form.
+
+In 2003 a paper published in Nature by Whiting et al. suggested that wings may have reappeared several times within the ancestrally wingless phasmid, possibly on many occasions. We have inferred a comprehensive timetree of Phasmatodea and coded presence and absence of wings (as binary states: 2=absence and 1=presence). Missing data are coded as NA!
+
+### import tree + trait states and match them:
+```{r}
+
+tree<-read.tree("tree_phasmids.nwk")
+data<-read.csv("traits_phasmids.csv",row.names=1)
+chk<-name.check(tree,data)
+tree.pruned<-drop.tip(tree,chk$tree_not_data)
+data.pruned<-data[!(rownames(data)%in%chk$data_not_tree),,drop=FALSE]
+wings<-setNames(as.factor(data.pruned[,"wings"]),rownames(data.pruned))
+
+```
+
+### model fitting:
+
+With the idea that "all model are wrong, but some are usefull" we have tested some of them to see which one fits best to phasmid phylogeny. 
+```{r, fig.width=12}
+
+ER<-fitDiscrete(tree.pruned,data.pruned,model="ER")
+
+plot(ER)
+
+```
+
+```{r, fig.width=12}
+
+ARD<-fitDiscrete(tree.pruned,data.pruned,model="ARD")
+
+plot(ARD)
+
+```
+
+This is a loss-only model, with a custom matrix (it doesn't make a lot of biological sense ...):
+```{r, fig.width=12}
+
+model.loss<-matrix(c(0,1,0,0),2,2)
+rownames(model.loss)<-colnames(model.loss)<-levels(wings)
+loss_only<-fitDiscrete(tree.pruned,data.pruned,model=model.loss)
+
+plot(loss_only)
+
+```
+
+This is a gain-only model, with a custom matrix (this is the biological hypothesis taht we are testing against ...):
+```{r, fig.width=12}
+
+model.gain<-matrix(c(0,0,1,0),2,2)
+rownames(model.gain)<-colnames(model.gain)<-levels(wings)
+gain_only<-fitDiscrete(tree.pruned,data.pruned,model=model.gain)
+
+plot(gain_only)
+
+```
+
+Now we can compare the four different models using both lnL and Akaike weights:
+```{r}
+
+lnL<-setNames(
+  c(gain_only$opt$lnL,loss_only$opt$lnL,
+    ER$opt$lnL,ARD$opt$lnL),
+  c("Loss-only","Gain-only","Equal Rates","All Rates Different"))
+
+lnL
+
+```
+
+```{r}
+
+aicc<-setNames(
+  c(gain_only$opt$aicc,loss_only$opt$aicc,
+    ER$opt$aicc,ARD$opt$aicc),
+  c("Loss-only","Gain-only","Equal Rates","All Rates Different"))
+
+aicw(aicc)
+
+```
+
+
+The best model is All Rates Different! The model which better describes our data (trait of extant species and phylogeny) allows for reversions!
+
+### ancestral state reconstruction:
+
+We then carried out an ancestral state reconstruction throughout the phylogeny, using the best-fit model (ARD): 
+
+```{r, fig.width=12}
+
+fitARD<-ace(wings,tree.pruned,model="ARD",type="discrete")
+
+no_br_tree <- compute.brlen(tree.pruned, power=0.4)
+
+plot.phylo(no_br_tree,type="fan",lwd=1, edge.width = 1, label.offset = 2,show.tip.label = FALSE,no.margin = TRUE)
+nodelabels(node=1:tree.pruned$Nnode+Ntip(tree.pruned),pie=fitARD$lik.anc,cex=0.2)
+tiplabels(pie=to.matrix(wings[tree.pruned$tip.label],levels(wings)),cex=0.2)
+fitARD
+
+```
+
+Plenty of reversions are observed and the probability of the Most Recent Common Ancestor (MRCA) of all phasmids beeing wingless is around 83% :-O.
